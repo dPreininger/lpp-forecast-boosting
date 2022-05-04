@@ -135,8 +135,8 @@ def train_model(data, label='Duration'):
         X1 = dataset[1].drop(label, axis=1).to_numpy()
         y1 = dataset[1][label].to_numpy()
 
-        model0 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4)
-        model1 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4)
+        model0 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4, max_depth=7, learning_rate=0.25)
+        model1 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4, max_depth=7, learning_rate=0.25)
         model0.fit(X0, y0)
         model1.fit(X1, y1)
         models[route] = {0: model0, 1: model1}
@@ -178,4 +178,5 @@ if __name__ == '__main__':
     models = train_model(train_datasets)
     pred = predict(models, test_data)
     create_output(pred, departures_test)
+    print('done')
     
