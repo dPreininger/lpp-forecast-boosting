@@ -52,39 +52,42 @@ def add_structured_time(data):
     data['DP month'] = pd.to_datetime(data['Departure time']).dt.month
     return data
 
-def get_direction_from_row(row):
-    direction = row['Route description']
-    route = row['Route']
-    if route in direction_dict:
-        if direction == direction_dict[route]:
-            return 0
-        else:
-            return 1
+def build_route_key(row):
+    return (str(row['Route']) + row['Route Direction'] + row['Route description']).replace(' ', '')
 
-    direction_dict[route] = direction
-    return 0
+def build_route_key_man(route, direction, desc):
+    return (str(route) + direction + desc).replace(' ', '')
 
-def add_direction(data):
+def get_all_routes(data):
     """
-    Adds information about in which direction the bus is driving to the data.
+    Returns all unique routes.
     """
-    data['Direction'] = data.apply(get_direction_from_row, axis=1)
-    return data
+    return data['Route'].unique()
+
+def get_all_directions(data, route):
+    """
+    Returns all unique directions for a given route.
+    """
+    return data[(data['Route'] == route)]['Route Direction'].unique()
+
+def get_all_discriptions(data, route, direction):
+    """
+    Returns all unique descriptions for a given route and direction.
+    """
+    return data[(data['Route'] == route) & (data['Route Direction'] == direction)]['Route description'].unique()
 
 def split_by_route(data):
     """
     Creates seperate dataset for each route.
     """
     datasets = {}
-    for route in get_routes(data):
-        if route not in datasets:
-            datasets[route] = []
-        datasets[route].append(data.copy()[(data['Route'] == route) & (data['Direction'] == 0)])
-        datasets[route].append(data.copy()[(data['Route'] == route) & (data['Direction'] == 1)])
+    for route in get_all_routes(data):
+        for direction in get_all_directions(data, route):
+            for description in get_all_discriptions(data, route, direction):
+                datasets[build_route_key_man(route, direction, description)] = data.copy()[(data['Route'] == route) & (data['Route Direction'] == direction) & (data['Route description'] == description)]
+
     return datasets
 
-def get_routes(data):
-    return list(data['Route'].unique())
 
 def pre_process_data(data, train=True):
     """
@@ -93,13 +96,9 @@ def pre_process_data(data, train=True):
 
     data = add_day_of_week(data)
     data = add_holiday_info(data)
-    # data = add_route(data)
-    data = add_direction(data)
     data = add_structured_time(data)
 
     # not really needed since they are the same everywhere
-    data = data.drop('Route description', axis=1)
-    data = data.drop('Route Direction', axis=1)
     data = data.drop('First station' , axis=1)
     data = data.drop('Last station', axis=1)
 
@@ -117,9 +116,7 @@ def pre_process_data(data, train=True):
     if train:
         datasets = split_by_route(data)
         for set in datasets.values():
-            set[0].drop(['Route', 'Direction'], axis=1, inplace=True)
-            set[1].drop(['Route', 'Direction'], axis=1, inplace=True)
-        data = data.drop('Route', axis=1)
+            set.drop(['Route', 'Route Direction', 'Route description'], axis=1, inplace=True)
 
     return data, departures, datasets
 
@@ -129,17 +126,12 @@ def train_model(data, label='Duration'):
     """
     models = {}
     for route, dataset in data.items():
-        X0 = dataset[0].drop(label, axis=1).to_numpy()
-        y0 = dataset[0][label].to_numpy()
+        X = dataset.drop(label, axis=1).to_numpy()
+        y = dataset[label].to_numpy()
 
-        X1 = dataset[1].drop(label, axis=1).to_numpy()
-        y1 = dataset[1][label].to_numpy()
-
-        model0 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4, max_depth=7, learning_rate=0.25)
-        model1 = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4, max_depth=7, learning_rate=0.25)
-        model0.fit(X0, y0)
-        model1.fit(X1, y1)
-        models[route] = {0: model0, 1: model1}
+        model = xgb.XGBRegressor(eval_metric='mae', verbosity=0, n_threads=4, max_depth=7, learning_rate=0.25)
+        model.fit(X, y)
+        models[route] = model
     return models
 
 def predict(models, data: pd.DataFrame):
@@ -148,8 +140,11 @@ def predict(models, data: pd.DataFrame):
     """
     results = []
     for _, row in data.iterrows():
-        model = models[row['Route']][row['Direction']]
-        pred_data = [row.drop(['Route', 'Direction']).to_numpy()]
+        try:
+            model = models[build_route_key(row)]
+        except KeyError:
+            model = models[build_route_key_man(row['Route'], row['Route Direction'], row['Route description'].split(';')[0])]
+        pred_data = [row.drop(['Route', 'Route Direction', 'Route description']).to_numpy()]
         results.append(model.predict(pred_data))
 
     data['Duration'] = results
